@@ -1,30 +1,13 @@
-FROM python:3.11-alpine as builder
-
+FROM python:3.10.17-alpine3.21 as builder
 WORKDIR /app
+COPY pyproject.toml ./
+RUN pip install .[test]
+COPY . .
 
-RUN apk add --no-cache python3-dev py3-pip gcc musl-dev
-
-RUN python -m venv /app/venv
- 
-ENV PATH="/app/venv/bin:$PATH"
-ENV PYTHONUNBUFFERED=1
-
-# Копируем весь проект (pyproject.toml, src/, tests/, etc.)
-COPY . /app
-
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir ".[test]"
-
-FROM python:3.11-alpine
-
+FROM python:3.10.17-alpine3.21
+RUN adduser -D appuser
 WORKDIR /app
-
-COPY --from=builder /app/venv /app/venv
-COPY src /app/src
-COPY tests /app/tests
-
-ENV PATH="/app/venv/bin:$PATH"
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-CMD [ "uvicorn", "src.main:app", "--reload", "--host", "0.0.0.0", "--port", "8112" ] 
+COPY --from=builder /app /app
+RUN pip install --no-cache-dir .
+USER appuser
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8112", "--reload"]
