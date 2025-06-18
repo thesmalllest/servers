@@ -66,6 +66,20 @@ jobs:
           push: true
           tags: ${{ vars.DOCKERHUB_USERNAME }}/python-crud:latest
 
+      - name: Check server accessibility
+        run: |
+          echo "Testing connection to ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PORT }}"
+          if timeout 5 bash -c "echo >/dev/tcp/${{ secrets.SSH_HOST }}/${{ secrets.SSH_PORT }}"; then
+            echo "✅ Server is reachable"
+          else
+            echo "❌ Server is UNREACHABLE"
+            echo "Please check:"
+            echo "1. Firewall settings"
+            echo "2. SSH service status"
+            echo "3. Network connectivity"
+            exit 1
+          fi
+
       - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1
         with:
@@ -73,13 +87,28 @@ jobs:
           port: ${{ secrets.SSH_PORT }}
           username: ${{ secrets.SSH_USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 60s  
+          debug: true   
           script: |
-            podman login -u ${{ vars.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }} docker.io
-
+            set -ex  
+            
+            podman login -u "${{ vars.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}" docker.io || {
+              echo "❌ Docker login failed"
+              exit 1
+            }
+            
             podman stop python-crud || true
             podman rm python-crud || true
-            podman rmi ${{ vars.DOCKERHUB_USERNAME }}/python-crud:latest || true
-            podman pull ${{ vars.DOCKERHUB_USERNAME }}/python-crud:latest
-            podman run -d --name python-crud --network host ${{ vars.DOCKERHUB_USERNAME }}/python-crud:latest
-
+            
+            podman pull "${{ vars.DOCKERHUB_USERNAME }}"/python-crud:latest
+            
+            podman run -d \
+              --name python-crud \
+              -p 8000:8000 \  # Явное пробрасывание портов
+              --restart unless-stopped \
+              "${{ vars.DOCKERHUB_USERNAME }}"/python-crud:latest
+            
+            sleep 5
+            podman ps --filter "name=python-crud" --format "table {{.ID}}\t{{.Names}}\t{{.Status}}"
+            
             echo "✅ Container has been deployed successfully!"
