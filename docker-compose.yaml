@@ -1,0 +1,11 @@
+services:
+  db:
+    image: postgres:latest
+    restart: unless-stopped
+    environment:
+      # создаём БД kubsu и пользователя kubsu с паролем kubsu
+      POSTGRES_DB: kubsu
+      POSTGRES_USER: kubsu
+      POSTGRES_PASSWORD: kubsu
+    ports:
+      - "5432:5432"
