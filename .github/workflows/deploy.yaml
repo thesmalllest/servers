@@ -58,14 +58,14 @@ jobs:
         run: |
           # Экспорт образа и загрузка на удаленный сервер
           sudo docker save myapp:final | ssh -o StrictHostKeyChecking=no \
-            -p ${{ secrets.PORT }} \
-            ${{ secrets.USER }}@${{ secrets.HOST }} \
+            -p ${{ secrets.SSH_PORT }} \
+            ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} \
             "podman load && podman tag myapp:final myapp:final"
           
           # Остановка и запуск контейнера
           ssh -o StrictHostKeyChecking=no \
-            -p ${{ secrets.PORT }} \
-            ${{ secrets.USER }}@${{ secrets.HOST }} \
+            -p ${{ secrets.SSH_PORT }} \
+            ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} \
             "podman stop myapp || true && \
              podman rm myapp || true && \
              podman run -d --name myapp \
