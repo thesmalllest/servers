@@ -7,68 +7,75 @@ on:
 jobs:
   build-test-deploy: 
     runs-on: self-hosted 
-
-    services:  
-      postgres:
-        image: postgres:14  
-        env: 
-          POSTGRES_DB: kubsu
-          POSTGRES_USER: kubsu
-          POSTGRES_PASSWORD: kubsu
-        ports:
-          - 5432:5432  
-        options: >- 
-          --health-cmd "pg_isready -U kubsu"
-          --health-interval 15s
-          --health-timeout 10s
-          --health-retries 5
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Wait for Postgres
+      # Запуск PostgreSQL контейнера
+      - name: Start PostgreSQL container
         run: |
-          until pg_isready -h localhost -p 5432 -U kubsu; do
-            echo "Waiting"
+          sudo docker run -d --name postgres \
+            -e POSTGRES_DB=kubsu \
+            -e POSTGRES_USER=kubsu \
+            -e POSTGRES_PASSWORD=kubsu \
+            -p 5432:5432 \
+            postgres:14
+          # Ожидание инициализации
+          sleep 10
+
+      # Ожидание готовности PostgreSQL
+      - name: Wait for PostgreSQL
+        run: |
+          echo "Waiting for PostgreSQL to start..."
+          until sudo docker exec postgres pg_isready -U kubsu; do
             sleep 3
           done
+          echo "PostgreSQL is ready!"
 
-      - name: Build Docker image
-        run: docker build -t myapp:test .
-
-      - name: Build test image
-        run: docker build --target builder -t myapp:test .
+      # Сборка и тестирование
+      - name: Build test Docker image
+        run: sudo docker build --target builder -t myapp:test .
 
       - name: Run tests
         run: |
-          docker run --rm \
-          --network host \
-          -e PYTHONPATH=/app \
-          myapp:test pytest tests
+          sudo docker run --rm \
+            --network host \
+            -e PYTHONPATH=/app \
+            myapp:test pytest tests
 
-      - name: Build prod image
-        run: docker build -t myapp:final .
+      # Сборка финального образа
+      - name: Build production Docker image
+        run: sudo docker build -t myapp:final .
 
-
+      # Настройка SSH для деплоя
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.5.4 
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-
+      # Деплой на удаленный сервер
       - name: Deploy to remote server
         run: |
-          docker save myapp:final | ssh -o StrictHostKeyChecking=no \
-          -p ${{ secrets.PORT }} \
-          ${{ secrets.USER }}@${{ secrets.HOST }} \
-          "podman load && podman tag myapp:final myapp:final"
-
+          # Экспорт образа и загрузка на удаленный сервер
+          sudo docker save myapp:final | ssh -o StrictHostKeyChecking=no \
+            -p ${{ secrets.PORT }} \
+            ${{ secrets.USER }}@${{ secrets.HOST }} \
+            "podman load && podman tag myapp:final myapp:final"
+          
+          # Остановка и запуск контейнера
           ssh -o StrictHostKeyChecking=no \
-          -p ${{ secrets.PORT }} \
-          ${{ secrets.USER }}@${{ secrets.HOST }} \
-          "podman stop myapp || true && \
-          podman rm myapp || true && \
-          podman run -d --name myapp \
-          --network=host \
-          myapp:final"
+            -p ${{ secrets.PORT }} \
+            ${{ secrets.USER }}@${{ secrets.HOST }} \
+            "podman stop myapp || true && \
+             podman rm myapp || true && \
+             podman run -d --name myapp \
+             --network=host \
+             myapp:final"
+
+      # Очистка ресурсов
+      - name: Cleanup PostgreSQL container
+        if: always()  # Выполнять всегда, даже при ошибках
+        run: |
+          sudo docker stop postgres || true
+          sudo docker rm postgres || true
+          echo "PostgreSQL container cleaned up"
