@@ -1,4 +1,4 @@
-FROM python:3.10.17-alpine3.21 as builder
+FROM python:3.10.17-alpine3.21 as builder 
 WORKDIR /app
 COPY pyproject.toml ./
 RUN pip install .[test]
