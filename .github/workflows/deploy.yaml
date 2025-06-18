@@ -1,114 +1,74 @@
-name: Deploy
+name: CI-CD  
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
 
 jobs:
-  test:
-    runs-on: self-hosted
-    services:
+  build-test-deploy: 
+    runs-on: self-hosted 
+
+    services:  
       postgres:
-        image: postgres:15-alpine
-        ports:
-          - "5432:5432"
-        env:
+        image: postgres:14  
+        env: 
           POSTGRES_DB: kubsu
           POSTGRES_USER: kubsu
           POSTGRES_PASSWORD: kubsu
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
+        ports:
+          - 5432:5432  
+        options: >- 
+          --health-cmd "pg_isready -U kubsu"
+          --health-interval 15s
+          --health-timeout 10s
           --health-retries 5
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build container for testing
-        uses: docker/build-push-action@v3
-        with:
-          context: .
-          file: ./Dockerfile
-          tags: ${{ vars.DOCKERHUB_USERNAME }}/python-crud-dev:latest
-          load: true
-
-      - name: Run tests inside container
+      - name: Wait for Postgres
         run: |
-          docker run --rm --network=host ${{ vars.DOCKERHUB_USERNAME }}/python-crud-dev:latest /app/venv/bin/python -m pytest tests
+          until pg_isready -h localhost -p 5432 -U kubsu; do
+            echo "Waiting"
+            sleep 3
+          done
 
-  deploy:
-    needs: test
-    runs-on: self-hosted
+      - name: Build Docker image
+        run: docker build -t myapp:test .
 
-    steps:
-      - name: Checkout main branch
-        uses: actions/checkout@v4
+      - name: Build test image
+        run: docker build --target builder -t myapp:test .
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push production image
-        uses: docker/build-push-action@v3
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ vars.DOCKERHUB_USERNAME }}/python-crud:latest
-
-      - name: Check server accessibility
+      - name: Run tests
         run: |
-          echo "Testing connection to ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PORT }}"
-          if timeout 5 bash -c "echo >/dev/tcp/${{ secrets.SSH_HOST }}/${{ secrets.SSH_PORT }}"; then
-            echo "✅ Server is reachable"
-          else
-            echo "❌ Server is UNREACHABLE"
-            echo "Please check:"
-            echo "1. Firewall settings"
-            echo "2. SSH service status"
-            echo "3. Network connectivity"
-            exit 1
-          fi
+          docker run --rm \
+          --network host \
+          -e PYTHONPATH=/app \
+          myapp:test pytest tests
 
-      - name: Deploy to server via SSH
-        uses: appleboy/ssh-action@v1
+      - name: Build prod image
+        run: docker build -t myapp:final .
+
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.5.4 
         with:
-          host: ${{ secrets.SSH_HOST }}
-          port: ${{ secrets.SSH_PORT }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          timeout: 60s  
-          debug: true   
-          script: |
-            set -ex  
-            
-            podman login -u "${{ vars.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}" docker.io || {
-              echo "❌ Docker login failed"
-              exit 1
-            }
-            
-            podman stop python-crud || true
-            podman rm python-crud || true
-            
-            podman pull "${{ vars.DOCKERHUB_USERNAME }}"/python-crud:latest
-            
-            podman run -d \
-              --name python-crud \
-              -p 8000:8000 \  # Явное пробрасывание портов
-              --restart unless-stopped \
-              "${{ vars.DOCKERHUB_USERNAME }}"/python-crud:latest
-            
-            sleep 5
-            podman ps --filter "name=python-crud" --format "table {{.ID}}\t{{.Names}}\t{{.Status}}"
-            
-            echo "✅ Container has been deployed successfully!"
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+
+      - name: Deploy to remote server
+        run: |
+          docker save myapp:final | ssh -o StrictHostKeyChecking=no \
+          -p ${{ secrets.PORT }} \
+          ${{ secrets.USER }}@${{ secrets.HOST }} \
+          "podman load && podman tag myapp:final myapp:final"
+
+          ssh -o StrictHostKeyChecking=no \
+          -p ${{ secrets.PORT }} \
+          ${{ secrets.USER }}@${{ secrets.HOST }} \
+          "podman stop myapp || true && \
+          podman rm myapp || true && \
+          podman run -d --name myapp \
+          --network=host \
+          myapp:final"
